@@ -14,7 +14,7 @@ const securityHeaders = [
       "img-src 'self' data: blob: https://*.supabase.co",
       "font-src 'self'",
       "connect-src 'self' https://*.supabase.co https://api.razorpay.com https://lux.razorpay.com",
-      "frame-src https://api.razorpay.com https://checkout.razorpay.com https://www.youtube.com https://youtube.com",
+      "frame-src https://api.razorpay.com https://checkout.razorpay.com https://www.youtube.com https://youtube.com https://drive.google.com https://docs.google.com",
       "object-src 'none'",
       "base-uri 'self'",
       "form-action 'self'"
