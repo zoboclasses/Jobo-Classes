@@ -15,8 +15,8 @@ export default function Footer() {
           <div>
             <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-ink/45">Support</h3>
             <div className="mt-4 space-y-2 text-sm text-ink/65">
-              <p>Helpline: <a href="tel:+919876543210" className="hover:text-accent">+91 98765 43210</a></p>
-              <p>Email: <a href="mailto:help@joboclasses.com" className="hover:text-accent">help@joboclasses.com</a></p>
+              <p>Helpline: <a href="tel:+917258020501" className="hover:text-accent">+91 72580 20501</a></p>
+              <p>Email: <a href="mailto:joboclasseshelpline@gmail.com" className="hover:text-accent">joboclasseshelpline@gmail.com</a></p>
               <p>Hours: Mon-Sat, 10 AM - 6 PM</p>
             </div>
           </div>
