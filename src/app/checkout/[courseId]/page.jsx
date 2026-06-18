@@ -1,11 +1,12 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Reveal } from '@/components/Reveal';
 
 export default function CheckoutPage() {
   const { courseId } = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const supabase = createClient();
   const [course, setCourse] = useState(null);
@@ -15,10 +16,48 @@ export default function CheckoutPage() {
   useEffect(() => {
     supabase.from('courses').select('*').eq('id', courseId).maybeSingle()
       .then(({ data }) => setCourse(data));
-    const script = document.createElement('script');
-    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-    document.body.appendChild(script);
+
+    // Load Cashfree JS SDK
+    if (!document.querySelector('script[src*="sdk.cashfree.com"]')) {
+      const script = document.createElement('script');
+      script.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
+      document.body.appendChild(script);
+    }
   }, [courseId]);
+
+  // Handle return from Cashfree redirect
+  useEffect(() => {
+    const returnOrderId = searchParams.get('order_id');
+    if (returnOrderId) {
+      verifyPayment(returnOrderId);
+    }
+  }, [searchParams]);
+
+  async function verifyPayment(orderId) {
+    setLoading(true);
+    setStatus('Verifying payment...');
+    try {
+      const v = await fetch('/api/cashfree/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId })
+      });
+      const result = await v.json();
+      if (result.ok && result.status === 'PAID') {
+        router.push(`/courses/${courseId}`);
+        router.refresh();
+      } else if (result.status === 'ACTIVE') {
+        setLoading(false);
+        setStatus('Payment is still processing. Please wait or try again.');
+      } else {
+        setLoading(false);
+        setStatus('Payment failed or was cancelled. Please try again.');
+      }
+    } catch {
+      setLoading(false);
+      setStatus('Payment verification failed. Contact support.');
+    }
+  }
 
   async function pay() {
     setLoading(true); setStatus('');
@@ -26,7 +65,7 @@ export default function CheckoutPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push('/login'); return; }
 
-      const res = await fetch('/api/razorpay/order', {
+      const res = await fetch('/api/cashfree/order', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ courseId })
       });
@@ -44,35 +83,29 @@ export default function CheckoutPage() {
         return;
       }
 
-      const rzp = new window.Razorpay({
-        key: order.keyId,
-        amount: order.amount,
-        currency: 'INR',
-        name: 'Jobo Classes',
-        description: course?.title,
-        order_id: order.orderId,
-        prefill: { email: user.email || '' },
-        theme: { color: '#2563eb' },
-        handler: async (response) => {
-          setStatus('Verifying payment...');
-          try {
-            const v = await fetch('/api/razorpay/verify', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(response)
-            });
-            if (v.ok) { router.push(`/courses/${courseId}`); router.refresh(); }
-            else { setLoading(false); setStatus('Payment verification failed. Contact support.'); }
-          } catch {
-            setLoading(false);
-            setStatus('Payment verification failed. Contact support.');
-          }
-        },
-        modal: { ondismiss: () => setLoading(false) }
+      // Open Cashfree checkout — no API keys sent to client, only paymentSessionId
+      const cashfreeMode = process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox';
+      const cashfree = window.Cashfree({ mode: cashfreeMode });
+      cashfree.checkout({
+        paymentSessionId: order.paymentSessionId,
+        redirectTarget: '_self', // redirects to return_url with order_id
+      }).then(async (result) => {
+        if (result.error) {
+          setLoading(false);
+          setStatus(result.error.message || 'Payment was cancelled.');
+          return;
+        }
+        // If redirect happened, the useEffect above handles verification
+        if (!result.redirect) {
+          await verifyPayment(order.orderId);
+        }
+      }).catch(() => {
+        setLoading(false);
+        setStatus('Payment was cancelled.');
       });
-      rzp.open();
     } catch (err) {
       setLoading(false);
-      setStatus(err.message || 'Something went wrong. Please try again.');
+      setStatus('Something went wrong. Please try again.');
     }
   }
 
@@ -86,7 +119,7 @@ export default function CheckoutPage() {
           <p className="mt-2 text-sm text-ink/60">One-time payment. Lifetime access to all videos, mock tests and notes in this course.</p>
           <p className="mt-6 text-4xl font-bold">₹{course.price_inr}</p>
           <button onClick={pay} disabled={loading} className="btn-primary mt-6 w-full">
-            {loading ? 'Processing...' : course.price_inr <= 0 ? 'Enroll for Free' : 'Pay with Razorpay'}
+            {loading ? 'Processing...' : course.price_inr <= 0 ? 'Enroll for Free' : 'Pay Now'}
           </button>
           {status && <p className="mt-4 text-sm text-accent">{status}</p>}
         </div>
