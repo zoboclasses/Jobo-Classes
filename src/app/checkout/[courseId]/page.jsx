@@ -13,35 +13,33 @@ export default function CheckoutPage() {
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
   const cashfreeRef = useRef(null);
-  const sdkReady = useRef(false);
 
   useEffect(() => {
     supabase.from('courses').select('*').eq('id', courseId).maybeSingle()
       .then(({ data }) => setCourse(data));
 
     // Load Cashfree JS SDK once
-    if (!document.querySelector('script[src*="sdk.cashfree.com"]')) {
+    const existing = document.querySelector('script[src*="sdk.cashfree.com"]');
+    if (existing && window.Cashfree) {
+      const mode = process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox';
+      cashfreeRef.current = window.Cashfree({ mode });
+    } else if (!existing) {
       const script = document.createElement('script');
       script.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
       script.onload = () => {
-        const mode = process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox';
-        cashfreeRef.current = window.Cashfree({ mode });
-        sdkReady.current = true;
+        if (window.Cashfree) {
+          const mode = process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox';
+          cashfreeRef.current = window.Cashfree({ mode });
+        }
       };
       document.body.appendChild(script);
-    } else if (window.Cashfree) {
-      const mode = process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox';
-      cashfreeRef.current = window.Cashfree({ mode });
-      sdkReady.current = true;
     }
   }, [courseId]);
 
-  // Handle return from Cashfree redirect (if _self mode was used)
+  // Handle return from redirect (if browser was redirected)
   useEffect(() => {
     const returnOrderId = searchParams.get('order_id');
-    if (returnOrderId) {
-      verifyPayment(returnOrderId);
-    }
+    if (returnOrderId) verifyPayment(returnOrderId);
   }, [searchParams]);
 
   async function verifyPayment(orderId) {
@@ -57,27 +55,31 @@ export default function CheckoutPage() {
       if (result.ok && result.status === 'PAID') {
         router.push(`/courses/${courseId}`);
         router.refresh();
-      } else if (result.status === 'ACTIVE') {
-        setLoading(false);
-        setStatus('Payment is still processing. Please wait or try again.');
       } else {
         setLoading(false);
-        setStatus('Payment was not completed. Please try again.');
+        setStatus(result.status === 'ACTIVE'
+          ? 'Payment is still processing. Please wait or try again.'
+          : 'Payment was not completed. Please try again.');
       }
     } catch {
       setLoading(false);
-      setStatus('Payment verification failed. Contact support.');
+      setStatus('Verification failed. Contact support.');
     }
   }
 
   async function pay() {
-    setLoading(true); setStatus('');
+    setLoading(true);
+    setStatus('');
     try {
+      // 1. Check login
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push('/login'); return; }
 
+      // 2. Create order on backend
+      setStatus('Creating order...');
       const res = await fetch('/api/cashfree/order', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ courseId })
       });
 
@@ -86,41 +88,51 @@ export default function CheckoutPage() {
 
       if (!res.ok) {
         setLoading(false);
-        return setStatus(order.error || 'Could not start payment.');
+        setStatus(order.error || 'Could not start payment. Please try again.');
+        return;
       }
 
-      // Free course — already enrolled by server
+      // 3. Free course — already enrolled
       if (order.free) {
-        setLoading(false);
         router.push(`/courses/${courseId}`);
         router.refresh();
         return;
       }
 
-      // Wait for SDK to be ready
-      if (!sdkReady.current || !cashfreeRef.current) {
-        // SDK not loaded yet, wait a bit
-        await new Promise(resolve => {
-          const check = setInterval(() => {
-            if (window.Cashfree) {
-              const mode = process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox';
-              cashfreeRef.current = window.Cashfree({ mode });
-              sdkReady.current = true;
-              clearInterval(check);
-              resolve();
-            }
-          }, 200);
-          // Timeout after 10s
-          setTimeout(() => { clearInterval(check); resolve(); }, 10000);
-        });
+      // 4. Wait for Cashfree SDK
+      if (!cashfreeRef.current) {
+        // Try to init if SDK loaded after our useEffect
+        if (window.Cashfree) {
+          const mode = process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox';
+          cashfreeRef.current = window.Cashfree({ mode });
+        } else {
+          // Wait up to 5 seconds for SDK to load
+          await new Promise((resolve) => {
+            let waited = 0;
+            const interval = setInterval(() => {
+              waited += 300;
+              if (window.Cashfree) {
+                const mode = process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox';
+                cashfreeRef.current = window.Cashfree({ mode });
+                clearInterval(interval);
+                resolve();
+              } else if (waited >= 5000) {
+                clearInterval(interval);
+                resolve();
+              }
+            }, 300);
+          });
+        }
       }
 
       if (!cashfreeRef.current) {
         setLoading(false);
-        return setStatus('Payment system is loading. Please try again.');
+        setStatus('Payment system failed to load. Please refresh the page and try again.');
+        return;
       }
 
-      // Open Cashfree checkout modal
+      // 5. Open Cashfree checkout
+      setStatus('Opening payment...');
       const result = await cashfreeRef.current.checkout({
         paymentSessionId: order.paymentSessionId,
         redirectTarget: '_modal',
@@ -128,22 +140,27 @@ export default function CheckoutPage() {
 
       if (result.error) {
         setLoading(false);
-        setStatus('Payment was not completed. Please try again.');
+        setStatus('Payment was not completed. You can try again.');
         return;
       }
 
       if (result.redirect) {
-        // Page is navigating away — return_url handler will pick up
-        return;
+        return; // browser navigating away
       }
 
       if (result.paymentDetails) {
-        // User submitted payment — verify on backend
         await verifyPayment(order.orderId);
+        return;
       }
-    } catch (err) {
+
+      // Fallback — shouldn't reach here
       setLoading(false);
-      setStatus('Something went wrong. Please try again.');
+      setStatus('Payment was not completed. You can try again.');
+
+    } catch (err) {
+      console.error('Payment error:', err);
+      setLoading(false);
+      setStatus('Something went wrong. Please refresh and try again.');
     }
   }
 

@@ -9,15 +9,15 @@ const securityHeaders = [
     key: 'Content-Security-Policy',
     value: [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://sdk.cashfree.com",
+      "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://*.cashfree.com",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob: https://*.supabase.co",
+      "img-src 'self' data: blob: https://*.supabase.co https://*.cashfree.com",
       "font-src 'self'",
-      "connect-src 'self' https://*.supabase.co https://sandbox.cashfree.com https://api.cashfree.com https://sdk.cashfree.com",
-      "frame-src https://sdk.cashfree.com https://sandbox.cashfree.com https://api.cashfree.com https://www.youtube.com https://youtube.com https://drive.google.com https://docs.google.com",
+      "connect-src 'self' https://*.supabase.co https://*.cashfree.com",
+      "frame-src https://*.cashfree.com https://www.youtube.com https://youtube.com https://drive.google.com https://docs.google.com",
       "object-src 'none'",
       "base-uri 'self'",
-      "form-action 'self'"
+      "form-action 'self' https://*.cashfree.com"
     ].join('; ')
   },
   // Strict-Transport-Security (for production HTTPS)

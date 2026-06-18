@@ -81,7 +81,9 @@ export async function POST(request) {
 
     return NextResponse.json({ orderId, paymentSessionId });
   } catch (err) {
-    console.error('Cashfree order error:', err?.response?.data || err);
-    return NextResponse.json({ error: 'Payment creation failed. Please try again.' }, { status: 500 });
+    const cfError = err?.response?.data;
+    console.error('Cashfree order error:', cfError || err);
+    const msg = cfError?.message || 'Payment creation failed. Please try again.';
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
