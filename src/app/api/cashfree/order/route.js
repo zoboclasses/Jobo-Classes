@@ -47,6 +47,13 @@ export async function POST(request) {
     // Generate a unique order ID
     const orderId = `order_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
 
+    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+    const orderMeta = {};
+    // return_url only needed for redirect mode; Cashfree production requires HTTPS
+    if (siteUrl.startsWith('https://')) {
+      orderMeta.return_url = `${siteUrl}/checkout/${courseId}?order_id=${orderId}`;
+    }
+
     const response = await cashfree.PGCreateOrder({
       order_id: orderId,
       order_amount: course.price_inr,  // RUPEES — not paise
@@ -57,9 +64,7 @@ export async function POST(request) {
         customer_email: user.email || '',
         customer_name: user.user_metadata?.full_name || '',
       },
-      order_meta: {
-        return_url: `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/checkout/${courseId}?order_id=${orderId}`,
-      },
+      order_meta: orderMeta,
       order_note: `Course: ${courseId}`,
     });
 

@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Reveal } from '@/components/Reveal';
@@ -12,20 +12,31 @@ export default function CheckoutPage() {
   const [course, setCourse] = useState(null);
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
+  const cashfreeRef = useRef(null);
+  const sdkReady = useRef(false);
 
   useEffect(() => {
     supabase.from('courses').select('*').eq('id', courseId).maybeSingle()
       .then(({ data }) => setCourse(data));
 
-    // Load Cashfree JS SDK
+    // Load Cashfree JS SDK once
     if (!document.querySelector('script[src*="sdk.cashfree.com"]')) {
       const script = document.createElement('script');
       script.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
+      script.onload = () => {
+        const mode = process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox';
+        cashfreeRef.current = window.Cashfree({ mode });
+        sdkReady.current = true;
+      };
       document.body.appendChild(script);
+    } else if (window.Cashfree) {
+      const mode = process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox';
+      cashfreeRef.current = window.Cashfree({ mode });
+      sdkReady.current = true;
     }
   }, [courseId]);
 
-  // Handle return from Cashfree redirect
+  // Handle return from Cashfree redirect (if _self mode was used)
   useEffect(() => {
     const returnOrderId = searchParams.get('order_id');
     if (returnOrderId) {
@@ -51,7 +62,7 @@ export default function CheckoutPage() {
         setStatus('Payment is still processing. Please wait or try again.');
       } else {
         setLoading(false);
-        setStatus('Payment failed or was cancelled. Please try again.');
+        setStatus('Payment was not completed. Please try again.');
       }
     } catch {
       setLoading(false);
@@ -73,9 +84,12 @@ export default function CheckoutPage() {
       let order;
       try { order = await res.json(); } catch { order = {}; }
 
-      if (!res.ok) { setLoading(false); return setStatus(order.error || 'Could not start payment.'); }
+      if (!res.ok) {
+        setLoading(false);
+        return setStatus(order.error || 'Could not start payment.');
+      }
 
-      // Free course — already enrolled by server, redirect back
+      // Free course — already enrolled by server
       if (order.free) {
         setLoading(false);
         router.push(`/courses/${courseId}`);
@@ -83,26 +97,50 @@ export default function CheckoutPage() {
         return;
       }
 
-      // Open Cashfree checkout — no API keys sent to client, only paymentSessionId
-      const cashfreeMode = process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox';
-      const cashfree = window.Cashfree({ mode: cashfreeMode });
-      cashfree.checkout({
-        paymentSessionId: order.paymentSessionId,
-        redirectTarget: '_self', // redirects to return_url with order_id
-      }).then(async (result) => {
-        if (result.error) {
-          setLoading(false);
-          setStatus(result.error.message || 'Payment was cancelled.');
-          return;
-        }
-        // If redirect happened, the useEffect above handles verification
-        if (!result.redirect) {
-          await verifyPayment(order.orderId);
-        }
-      }).catch(() => {
+      // Wait for SDK to be ready
+      if (!sdkReady.current || !cashfreeRef.current) {
+        // SDK not loaded yet, wait a bit
+        await new Promise(resolve => {
+          const check = setInterval(() => {
+            if (window.Cashfree) {
+              const mode = process.env.NEXT_PUBLIC_CASHFREE_ENV === 'PRODUCTION' ? 'production' : 'sandbox';
+              cashfreeRef.current = window.Cashfree({ mode });
+              sdkReady.current = true;
+              clearInterval(check);
+              resolve();
+            }
+          }, 200);
+          // Timeout after 10s
+          setTimeout(() => { clearInterval(check); resolve(); }, 10000);
+        });
+      }
+
+      if (!cashfreeRef.current) {
         setLoading(false);
-        setStatus('Payment was cancelled.');
+        return setStatus('Payment system is loading. Please try again.');
+      }
+
+      // Open Cashfree checkout modal
+      const result = await cashfreeRef.current.checkout({
+        paymentSessionId: order.paymentSessionId,
+        redirectTarget: '_modal',
       });
+
+      if (result.error) {
+        setLoading(false);
+        setStatus('Payment was not completed. Please try again.');
+        return;
+      }
+
+      if (result.redirect) {
+        // Page is navigating away — return_url handler will pick up
+        return;
+      }
+
+      if (result.paymentDetails) {
+        // User submitted payment — verify on backend
+        await verifyPayment(order.orderId);
+      }
     } catch (err) {
       setLoading(false);
       setStatus('Something went wrong. Please try again.');
